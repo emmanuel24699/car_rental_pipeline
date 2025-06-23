@@ -1,0 +1,425 @@
+{
+  "Comment": "Car Rental Serverless Data Pipeline with Error and Success Handling",
+  "StartAt": "RunSparkJobs",
+  "States": {
+    "RunSparkJobs": {
+      "Type": "Parallel",
+      "Next": "RunGlueCrawlers",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Branches": [
+        {
+          "StartAt": "RunSparkJob1",
+          "States": {
+            "RunSparkJob1": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::emr-serverless:startJobRun.sync",
+              "Parameters": {
+                "ApplicationId": "00ftgbilu6b5rb09",
+                "ExecutionRoleArn": "arn:aws:iam::353654036829:role/Lab4EMRServerlessRole",
+                "JobDriver": {
+                  "SparkSubmit": {
+                    "EntryPoint": "s3://lab4-car-rental-data/scripts/spark_job1.py",
+                    "SparkSubmitParameters": "--conf spark.driver.cores=2 --conf spark.driver.memory=4g --conf spark.executor.cores=2 --conf spark.executor.memory=4g"
+                  }
+                },
+                "ConfigurationOverrides": {
+                  "MonitoringConfiguration": {
+                    "S3MonitoringConfiguration": {
+                      "LogUri": "s3://lab4-car-rental-data/logs/"
+                    }
+                  }
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunSparkJob2",
+          "States": {
+            "RunSparkJob2": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::emr-serverless:startJobRun.sync",
+              "Parameters": {
+                "ApplicationId": "00ftgbilu6b5rb09",
+                "ExecutionRoleArn": "arn:aws:iam::353654036829:role/Lab4EMRServerlessRole",
+                "JobDriver": {
+                  "SparkSubmit": {
+                    "EntryPoint": "s3://lab4-car-rental-data/scripts/spark_job2.py",
+                    "SparkSubmitParameters": "--conf spark.driver.cores=2 --conf spark.driver.memory=4g --conf spark.executor.cores=2 --conf spark.executor.memory=4g"
+                  }
+                },
+                "ConfigurationOverrides": {
+                  "MonitoringConfiguration": {
+                    "S3MonitoringConfiguration": {
+                      "LogUri": "s3://lab4-car-rental-data/logs/"
+                    }
+                  }
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ]
+    },
+    "RunGlueCrawlers": {
+      "Type": "Parallel",
+      "Next": "RunAthenaQueries",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Branches": [
+        {
+          "StartAt": "StartLocationCrawler",
+          "States": {
+            "StartLocationCrawler": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+              "Parameters": {
+                "Name": "LocationMetricsCrawler"
+              },
+              "Next": "WaitLocationCrawler"
+            },
+            "WaitLocationCrawler": {
+              "Type": "Wait",
+              "Seconds": 10,
+              "Next": "GetLocationCrawlerStatus"
+            },
+            "GetLocationCrawlerStatus": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+              "Parameters": {
+                "Name": "LocationMetricsCrawler"
+              },
+              "ResultPath": "$.CrawlerStatus",
+              "Next": "IsLocationCrawlerFinished"
+            },
+            "IsLocationCrawlerFinished": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.CrawlerStatus.Crawler.State",
+                  "StringEquals": "RUNNING",
+                  "Next": "WaitLocationCrawler"
+                },
+                {
+                  "Variable": "$.CrawlerStatus.Crawler.State",
+                  "StringEquals": "STOPPING",
+                  "Next": "WaitLocationCrawler"
+                }
+              ],
+              "Default": "LocationCrawlerSucceeded"
+            },
+            "LocationCrawlerSucceeded": {
+              "Type": "Succeed"
+            }
+          }
+        },
+        {
+          "StartAt": "StartVehicleCrawler",
+          "States": {
+            "StartVehicleCrawler": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+              "Parameters": {
+                "Name": "VehicleMetricsCrawler"
+              },
+              "Next": "WaitVehicleCrawler"
+            },
+            "WaitVehicleCrawler": {
+              "Type": "Wait",
+              "Seconds": 10,
+              "Next": "GetVehicleCrawlerStatus"
+            },
+            "GetVehicleCrawlerStatus": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+              "Parameters": {
+                "Name": "VehicleMetricsCrawler"
+              },
+              "ResultPath": "$.CrawlerStatus",
+              "Next": "IsVehicleCrawlerFinished"
+            },
+            "IsVehicleCrawlerFinished": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.CrawlerStatus.Crawler.State",
+                  "StringEquals": "RUNNING",
+                  "Next": "WaitVehicleCrawler"
+                },
+                {
+                  "Variable": "$.CrawlerStatus.Crawler.State",
+                  "StringEquals": "STOPPING",
+                  "Next": "WaitVehicleCrawler"
+                }
+              ],
+              "Default": "VehicleCrawlerSucceeded"
+            },
+            "VehicleCrawlerSucceeded": {
+              "Type": "Succeed"
+            }
+          }
+        },
+        {
+          "StartAt": "StartDailyCrawler",
+          "States": {
+            "StartDailyCrawler": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+              "Parameters": {
+                "Name": "DailyMetricsCrawler"
+              },
+              "Next": "WaitDailyCrawler"
+            },
+            "WaitDailyCrawler": {
+              "Type": "Wait",
+              "Seconds": 10,
+              "Next": "GetDailyCrawlerStatus"
+            },
+            "GetDailyCrawlerStatus": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+              "Parameters": {
+                "Name": "DailyMetricsCrawler"
+              },
+              "ResultPath": "$.CrawlerStatus",
+              "Next": "IsDailyCrawlerFinished"
+            },
+            "IsDailyCrawlerFinished": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.CrawlerStatus.Crawler.State",
+                  "StringEquals": "RUNNING",
+                  "Next": "WaitDailyCrawler"
+                },
+                {
+                  "Variable": "$.CrawlerStatus.Crawler.State",
+                  "StringEquals": "STOPPING",
+                  "Next": "WaitDailyCrawler"
+                }
+              ],
+              "Default": "DailyCrawlerSucceeded"
+            },
+            "DailyCrawlerSucceeded": {
+              "Type": "Succeed"
+            }
+          }
+        },
+        {
+          "StartAt": "StartUserCrawler",
+          "States": {
+            "StartUserCrawler": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+              "Parameters": {
+                "Name": "UserMetricsCrawler"
+              },
+              "Next": "WaitUserCrawler"
+            },
+            "WaitUserCrawler": {
+              "Type": "Wait",
+              "Seconds": 10,
+              "Next": "GetUserCrawlerStatus"
+            },
+            "GetUserCrawlerStatus": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+              "Parameters": {
+                "Name": "UserMetricsCrawler"
+              },
+              "ResultPath": "$.CrawlerStatus",
+              "Next": "IsUserCrawlerFinished"
+            },
+            "IsUserCrawlerFinished": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.CrawlerStatus.Crawler.State",
+                  "StringEquals": "RUNNING",
+                  "Next": "WaitUserCrawler"
+                },
+                {
+                  "Variable": "$.CrawlerStatus.Crawler.State",
+                  "StringEquals": "STOPPING",
+                  "Next": "WaitUserCrawler"
+                }
+              ],
+              "Default": "UserCrawlerSucceeded"
+            },
+            "UserCrawlerSucceeded": {
+              "Type": "Succeed"
+            }
+          }
+        }
+      ]
+    },
+    "RunAthenaQueries": {
+      "Type": "Parallel",
+      "Next": "NotifySuccess",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Branches": [
+        {
+          "StartAt": "RunTopLocationQuery",
+          "States": {
+            "RunTopLocationQuery": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+              "Parameters": {
+                "QueryString": "SELECT location_name, total_revenue FROM car_rental_db.location_metrics ORDER BY total_revenue DESC LIMIT 1",
+                "WorkGroup": "primary",
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://lab4-car-rental-data/athena-results/top-location/"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunTopVehicleQuery",
+          "States": {
+            "RunTopVehicleQuery": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+              "Parameters": {
+                "QueryString": "SELECT vehicle_type, total_revenue FROM car_rental_db.vehicle_metrics ORDER BY total_revenue DESC LIMIT 1",
+                "WorkGroup": "primary",
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://lab4-car-rental-data/athena-results/top-vehicle/"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunTopUsersQuery",
+          "States": {
+            "RunTopUsersQuery": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+              "Parameters": {
+                "QueryString": "SELECT first_name, last_name, total_revenue FROM car_rental_db.user_metrics ORDER BY total_revenue DESC LIMIT 5",
+                "WorkGroup": "primary",
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://lab4-car-rental-data/athena-results/top-users/"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunDailyQuery",
+          "States": {
+            "RunDailyQuery": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+              "Parameters": {
+                "QueryString": "SELECT rental_date, total_transactions, total_revenue FROM car_rental_db.daily_metrics ORDER BY total_revenue DESC LIMIT 10",
+                "WorkGroup": "primary",
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://lab4-car-rental-data/athena-results/daily-metrics/"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ]
+    },
+    "NotifySuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:353654036829:CarRentalPipelineAlerts",
+        "Message": {
+          "Default": "The Car Rental Serverless Data Pipeline has completed successfully.",
+          "Detail": {
+            "executionName.$": "$$.Execution.Name",
+            "status": "SUCCEEDED",
+            "stopTime.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "End": true
+    },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:353654036829:CarRentalPipelineAlerts",
+        "Message.$": "States.Format('A step in the Car Rental Serverless Data Pipeline has failed. Error: {}. Cause: {}', $$.Execution.Error, $$.Execution.Cause)"
+      },
+      "Next": "PipelineFailed"
+    },
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Comment": "The pipeline execution failed."
+    }
+  }
+}
