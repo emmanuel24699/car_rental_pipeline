@@ -20,6 +20,10 @@ The pipeline:
 
 ## Architecture
 
+<img src='images/architecture diagram.png' width='720' height='400'>
+
+##
+
 - **Input Data**: Raw CSV files in `s3://<bucket_name>/raw/`.
 - **Processing**: EMR Serverless runs PySpark scripts (`spark_job1.py`, `spark_job2.py`) to transform data and write Parquet outputs to `s3://<bucket_name>/processed/`.
 - **Schema Inference**: Glue crawlers create tables in the `car_rental_db` database.
@@ -102,6 +106,8 @@ The pipeline:
   - Select `car_rental_db` as the database.
 
 ### 7. Step Functions State Machine
+
+<img src='images/StepFunction.png' width='1500' height='1000'>
 
 - **Name**: Car Rental Serverless Data Pipeline.
 - **ASL File**: `state_machine.json`.
