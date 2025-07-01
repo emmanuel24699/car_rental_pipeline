@@ -11,18 +11,23 @@ import logging
 from datetime import datetime
 import boto3
 import sys
+import os
 
-# Initialize Spark session
+# ==== Setup logging ====
+log_filename = f"spark_job2_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+local_log_path = f"/tmp/{log_filename}"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler(local_log_path), logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger("UserTransactionAnalysis")
+
+# ==== Initialize Spark session ====
 spark = SparkSession.builder.appName("UserTransactionAnalysis").getOrCreate()
 
-# Configure logging to S3
-log_file = f"s3://lab4-car-rental-data/logs/spark_job2_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("UserTransactionAnalysis")
-s3_handler = logging.StreamHandler(sys.stdout)  # Fallback to stdout
-logger.addHandler(s3_handler)
-
-# Define schemas
+# ==== Define schemas ====
 users_schema = StructType(
     [
         StructField("user_id", StringType(), False),
@@ -50,22 +55,7 @@ transactions_schema = StructType(
     ]
 )
 
-
-# Function to write logs to S3
-def write_log_to_s3(message):
-    try:
-        s3_client = boto3.client("s3")
-        log_message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n"
-        s3_client.put_object(
-            Bucket="lab4-car-rental-data",
-            Key=f"logs/spark_job2_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
-            Body=log_message,
-        )
-    except Exception as e:
-        logger.error(f"Failed to write log to S3: {str(e)}")
-
-
-# Main processing with error handling
+# ==== Main Processing ====
 try:
     logger.info("Starting spark_job2: User and Transaction Analysis")
 
@@ -79,28 +69,23 @@ try:
         )
         logger.info("Successfully read input data from S3")
     except Exception as e:
-        error_msg = f"Error reading input data from S3: {str(e)}"
-        logger.error(error_msg)
-        write_log_to_s3(error_msg)
+        logger.error(f"Error reading input data from S3: {e}")
         raise e
 
-    # Validate data
+    # Validate non-empty datasets
     if users.count() == 0 or transactions.count() == 0:
-        error_msg = "One or more input datasets are empty"
-        logger.error(error_msg)
-        write_log_to_s3(error_msg)
-        raise ValueError(error_msg)
+        raise ValueError("One or more input datasets are empty")
 
-    # Join datasets
+    logger.info("Input data validation passed")
+
+    # Join Datasets
     try:
         trans_user = transactions.join(
             users, transactions.user_id == users.user_id, "inner"
         )
         logger.info("Successfully joined datasets")
     except Exception as e:
-        error_msg = f"Error joining datasets: {str(e)}"
-        logger.error(error_msg)
-        write_log_to_s3(error_msg)
+        logger.error(f"Error during join operations: {e}")
         raise e
 
     # Calculate KPIs
@@ -126,12 +111,10 @@ try:
         )
         logger.info("Successfully calculated KPIs")
     except Exception as e:
-        error_msg = f"Error calculating KPIs: {str(e)}"
-        logger.error(error_msg)
-        write_log_to_s3(error_msg)
+        logger.error(f"Error calculating KPIs: {e}")
         raise e
 
-    # Write results to S3
+    # Write Results to S3
     try:
         daily_metrics.write.mode("overwrite").parquet(
             "s3://lab4-car-rental-data/processed/daily_metrics/"
@@ -139,18 +122,27 @@ try:
         user_metrics.write.mode("overwrite").parquet(
             "s3://lab4-car-rental-data/processed/user_metrics/"
         )
-        logger.info("Successfully wrote results to S3")
+        logger.info("Successfully wrote output metrics to S3")
     except Exception as e:
-        error_msg = f"Error writing results to S3: {str(e)}"
-        logger.error(error_msg)
-        write_log_to_s3(error_msg)
+        logger.error(f"Error writing output to S3: {e}")
         raise e
 
 except Exception as e:
-    error_msg = f"Job failed: {str(e)}"
-    logger.error(error_msg)
-    write_log_to_s3(error_msg)
+    logger.error(f"Job failed with error: {e}")
     raise e
+
 finally:
+    try:
+        # Upload full log file to S3
+        s3_client = boto3.client("s3")
+        s3_key = f"logs/{log_filename}"
+        with open(local_log_path, "rb") as f:
+            s3_client.upload_fileobj(f, "lab4-car-rental-data", s3_key)
+        logger.info(
+            f"Uploaded full log file to S3 at: s3://lab4-car-rental-data/{s3_key}"
+        )
+    except Exception as upload_error:
+        logger.error(f"Failed to upload log file to S3: {upload_error}")
+
     spark.stop()
     logger.info("Spark session stopped")
